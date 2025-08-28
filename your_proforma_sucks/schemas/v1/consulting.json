@@ -1,0 +1,74 @@
+{
+  "metadata": {
+    "name": "consulting_firm",
+    "description": "Assumptions and inputs for a consulting or professional services firm",
+    "version": "1.0.0"
+  },
+  "assumptions": {
+    "staffing": {
+      "partners": {
+        "type": "object",
+        "properties": {
+          "headcount": {"type": "integer", "title": "Partner headcount"},
+          "billing_rate": {"type": "number", "title": "Partner billable rate ($/hour)"},
+          "salary": {"type": "number", "title": "Partner salary ($/year)"},
+          "utilization": {"type": "number", "title": "Partner utilization (fraction)", "minimum": 0, "maximum": 1},
+          "realization": {"type": "number", "title": "Partner realization (fraction)", "minimum": 0, "maximum": 1}
+        }
+      },
+      "managers": {
+        "type": "object",
+        "properties": {
+          "headcount": {"type": "integer", "title": "Manager headcount"},
+          "billing_rate": {"type": "number", "title": "Manager billable rate ($/hour)"},
+          "salary": {"type": "number", "title": "Manager salary ($/year)"},
+          "utilization": {"type": "number", "minimum": 0, "maximum": 1, "title": "Manager utilization"},
+          "realization": {"type": "number", "minimum": 0, "maximum": 1, "title": "Manager realization"}
+        }
+      },
+      "analysts": {
+        "type": "object",
+        "properties": {
+          "headcount": {"type": "integer", "title": "Analyst headcount"},
+          "billing_rate": {"type": "number", "title": "Analyst billable rate ($/hour)"},
+          "salary": {"type": "number", "title": "Analyst salary ($/year)"},
+          "utilization": {"type": "number", "minimum": 0, "maximum": 1, "title": "Analyst utilization"},
+          "realization": {"type": "number", "minimum": 0, "maximum": 1, "title": "Analyst realization"}
+        }
+      }
+    },
+    "revenue_mix": {
+      "retainer_fraction": {"type": "number", "title": "Retainer revenue fraction", "minimum": 0, "maximum": 1},
+      "project_fraction": {"type": "number", "title": "Project revenue fraction", "minimum": 0, "maximum": 1}
+    },
+    "overhead": {
+      "rent": {"type": "number", "title": "Office rent ($/year)"},
+      "software": {"type": "number", "title": "Software & tools ($/year)"},
+      "marketing": {"type": "number", "title": "Marketing spend ($/year)"},
+      "travel": {"type": "number", "title": "Travel & entertainment ($/year)"},
+      "admin_salaries": {"type": "number", "title": "Administrative salaries ($/year)"}
+    },
+    "working_capital": {
+      "wip_days": {"type": "integer", "title": "Work‑in‑process days"},
+      "ar_days": {"type": "integer", "title": "Accounts receivable days"},
+      "ap_days": {"type": "integer", "title": "Accounts payable days"}
+    },
+    "financing": {
+      "equity_investment": {"type": "number", "title": "Equity investment ($)"},
+      "debt_amount": {"type": "number", "title": "Debt amount ($)"},
+      "debt_interest_rate": {"type": "number", "title": "Debt interest rate (fraction)"},
+      "debt_term_years": {"type": "integer", "title": "Debt term (years)"}
+    },
+    "tax": {
+      "tax_rate": {"type": "number", "title": "Corporate tax rate (fraction)"}
+    },
+    "scenarios": {
+      "utilization_variants": {
+        "type": "array",
+        "title": "Utilization multipliers",
+        "items": {"type": "number"},
+        "description": "Array of utilization multipliers to test (e.g. [0.8, 1.0, 1.2])."
+      }
+    }
+  }
+}

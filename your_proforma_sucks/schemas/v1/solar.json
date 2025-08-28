@@ -1,0 +1,167 @@
+{
+  "metadata": {
+    "name": "utility_scale_solar",
+    "description": "Assumptions and inputs for a utility‑scale solar PV project",
+    "version": "1.0.0"
+  },
+  "assumptions": {
+    "site": {
+      "ac_mw": {
+        "type": "number",
+        "title": "AC capacity (MW)",
+        "description": "Installed alternating‑current capacity in megawatts."
+      },
+      "dc_mw": {
+        "type": "number",
+        "title": "DC capacity (MW)",
+        "description": "Installed direct‑current capacity in megawatts."
+      },
+      "dc_ac_ratio": {
+        "type": "number",
+        "title": "DC/AC ratio",
+        "description": "The ratio of DC to AC capacity (DC÷AC)."
+      },
+      "performance_ratio": {
+        "type": "number",
+        "title": "Performance ratio",
+        "description": "Overall system performance ratio accounting for system losses (0–1)",
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    "resource": {
+      "capacity_factor_p50": {
+        "type": "number",
+        "title": "Capacity factor P50",
+        "description": "P50 net capacity factor (fraction).",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "degradation": {
+        "type": "number",
+        "title": "Degradation rate",
+        "description": "Annual module degradation rate (fraction per year).",
+        "minimum": 0,
+        "maximum": 0.05
+      }
+    },
+    "capex": {
+      "module_cost_per_kw": {
+        "type": "number",
+        "title": "Module cost ($/kW)"
+      },
+      "inverter_cost_per_kw": {
+        "type": "number",
+        "title": "Inverter cost ($/kW)"
+      },
+      "bos_cost_per_kw": {
+        "type": "number",
+        "title": "Balance‑of‑system cost ($/kW)"
+      },
+      "interconnect_cost": {
+        "type": "number",
+        "title": "Interconnection cost ($)"
+      },
+      "land_cost": {
+        "type": "number",
+        "title": "Land cost ($)"
+      },
+      "development_cost": {
+        "type": "number",
+        "title": "Development/owner’s costs ($)"
+      },
+      "contingency_percent": {
+        "type": "number",
+        "title": "Contingency (%)",
+        "description": "Contingency as a percentage of base EPC cost."
+      }
+    },
+    "opex": {
+      "fixed_om_per_kw": {
+        "type": "number",
+        "title": "Fixed O&M ($/kW‑yr)",
+        "description": "Annual fixed operations & maintenance cost per kW (e.g. $23/kW‑yr)"
+      },
+      "insurance_per_kw": {
+        "type": "number",
+        "title": "Insurance ($/kW‑yr)"
+      },
+      "land_lease_per_acre": {
+        "type": "number",
+        "title": "Land lease ($/acre‑yr)"
+      }
+    },
+    "revenues": {
+      "ppa_price": {
+        "type": "number",
+        "title": "PPA price ($/MWh)",
+        "description": "Power purchase agreement price for contracted energy."
+      },
+      "ppa_escalator": {
+        "type": "number",
+        "title": "PPA escalator (fraction)",
+        "description": "Annual escalator for PPA price, e.g. 0.02 for 2%/yr"
+      },
+      "merchant_percentage": {
+        "type": "number",
+        "title": "Merchant share (%)",
+        "description": "Percentage of output sold into merchant market.",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "merchant_price": {
+        "type": "number",
+        "title": "Merchant price ($/MWh)"
+      }
+    },
+    "financing": {
+      "debt_fraction": {
+        "type": "number",
+        "title": "Debt fraction",
+        "description": "Portion of total capital funded with debt (0–1)",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "debt_interest_rate": {
+        "type": "number",
+        "title": "Debt interest rate (fraction)"
+      },
+      "debt_tenor_years": {
+        "type": "integer",
+        "title": "Debt tenor (years)"
+      },
+      "equity_return_target": {
+        "type": "number",
+        "title": "Equity return target (IRR)",
+        "description": "Target equity IRR for project investors."
+      }
+    },
+    "tax": {
+      "tax_rate": {
+        "type": "number",
+        "title": "Corporate tax rate (fraction)"
+      },
+      "macrs_class": {
+        "type": "string",
+        "title": "MACRS class",
+        "enum": ["5yr", "15yr"],
+        "description": "Applicable MACRS depreciation schedule"
+      },
+      "itc_percent": {
+        "type": "number",
+        "title": "Investment Tax Credit (%)",
+        "description": "Percentage of eligible basis eligible for ITC."
+      }
+    },
+    "scenarios": {
+      "ppa_plus_minus": {
+        "type": "array",
+        "title": "PPA price variations",
+        "items": {
+          "type": "number"
+        },
+        "description": "Array of PPA price multipliers to test (e.g. [0.9, 1.0, 1.1])."
+      }
+    }
+  }
+}

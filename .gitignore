@@ -1,0 +1,9 @@
+# Ignore the SQLite database and other generated files
+app.db
+__pycache__/
+*.pyc
+env/
+venv/
+*.egg-info
+dist/
+build/
