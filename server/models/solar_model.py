@@ -2,9 +2,9 @@
 Solar project financial model.
 
 This module contains helper functions to compute basic financial outputs for a
-utility‑scale solar PV project based on the assumption schema defined in
+utility-scale solar PV project based on the assumption schema defined in
 `schemas/v1/solar.json`. It is not intended to replace a full
-project‑finance model, but rather to provide reasonable first‑order
+project-finance model, but rather to provide reasonable first-order
 calculations that can be surfaced in the web app.
 
 The core entry point is ``calculate_cashflows`` which accepts a dictionary of
@@ -87,10 +87,10 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
     itc_value = total_capex * inputs.itc_percent
     net_capex = total_capex - itc_value
 
-    # Financing: simple assumption – debt draws at COD and interest paid annually on outstanding balance.
+    # Financing: simple assumption - debt draws at COD and interest paid annually on outstanding balance.
     debt_amount = net_capex * inputs.debt_fraction
     equity_amount = net_capex - debt_amount
-    # Debt amortization – simple mortgage style payment with equal annual payments over tenor
+    # Debt amortization - simple annuity
     if inputs.debt_fraction > 0:
         rate = inputs.debt_interest_rate
         n = inputs.debt_tenor_years
@@ -105,24 +105,28 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
     for year in range(years):
         # Revenue minus O&M
         ebitda = annual_revenue[year] - opex[year]
-        # Depreciation – simplified straight line over 5 years on net capex
+        # Depreciation - simplified straight line over 5 years on net capex
         depreciation = net_capex / 5 if year < 5 else 0.0
         # Interest expense on outstanding debt
         interest = debt_balance * inputs.debt_interest_rate
-        # Principal payment if within tenor
+        # Principal payment if within tenor.
         principal = annual_debt_payment - interest if year < inputs.debt_tenor_years else 0.0
         # Adjust debt balance
-        debt_balance = max(0.0, debt_balance - principal)
-        taxable_income = max(0.0, ebitda - depreciation - (annual_debt_payment - interest))
+        debt_balance = max(0., debt_balance - principal)
+        taxable_income = max(0., ebitda - depreciation - (annual_debt_payment - interest))
         tax = taxable_income * inputs.tax_rate
         net_income = ebitda - tax - (annual_debt_payment - interest)
         cashflow_to_equity = net_income
         cashflows.append(cashflow_to_equity)
-    # Calculate equity IRR using numpy's irr function
+
+    # Calculate equity IRR using numpy_financial (np.irr was removed in NumPy >= 1.20)
     try:
-        irr = float(np.irr(cashflows))  # may return np.nan
+        import numpy_financial as npf
+        irr_val = float(npf.irr(cashflows))
+        irr = irr_val if irr_val == irr_val else None  # filter NaN
     except Exception:
         irr = None
+
     return {
         "cashflows": cashflows,
         "irr": irr,

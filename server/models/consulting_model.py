@@ -78,13 +78,14 @@ def calculate_income_statement(inputs: ConsultingInputs, years: int = 5) -> Dict
     tax = taxable_income * inputs.tax_rate
     net_income = ebitda - tax
 
-    # Build cashflows for IRR: equity investment at year 0 equals zero (assuming financing covers working capital) and subsequent cash flows equal net income
+    # Build cashflows for IRR: equity investment at year 0 equals zero (assuming financing covers working capital) and subsequent cashflows equal net income
     cashflows = [-inputs.financing.get("equity_investment", 0.0)]
     for _ in range(years):
         cashflows.append(net_income)
 
     try:
-        irr = np.irr(cashflows)
+        import numpy_financial as npf
+        irr = float(npf.irr(cashflows))
     except Exception:
         irr = None
 
