@@ -4,7 +4,6 @@ Tests for the SQLite persistence layer (database.py).
 Uses pytest's tmp_path fixture to redirect DB_PATH to a temp file,
 keeping tests isolated and leaving no artifacts behind.
 """
-import io
 import pytest
 import pandas as pd
 
@@ -56,18 +55,39 @@ def test_multiple_users_dont_interfere():
     assert database.authenticate_user("user_a", "pass_b") is False
 
 
+def test_password_is_not_stored_in_plaintext():
+    import database
+    database.create_user("hashed-user", "correct horse battery staple")
+    with database.get_connection() as connection:
+        stored = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?", ("hashed-user",)
+        ).fetchone()[0]
+    assert stored != "correct horse battery staple"
+    assert stored.startswith("scrypt$")
+
+
+def test_session_resolves_to_owner():
+    import database
+    database.create_user("session-user", "password123")
+    token = database.create_session("session-user")
+    assert database.resolve_session(token) == "session-user"
+    assert database.resolve_session("not-the-token") is None
+
+
 # ── Model persistence ─────────────────────────────────────────────────────────
 
 def test_save_model_returns_string_id():
     import database
+    database.create_user("user1", "password123")
     df = pd.DataFrame({"month": [1, 2], "revenue": [1000.0, 1050.0]})
     model_id = database.save_model("user1", df)
     assert isinstance(model_id, str)
-    assert len(model_id) == 16  # os.urandom(8).hex() = 16 chars
+    assert len(model_id) == 32
 
 
 def test_load_model_roundtrip_preserves_shape():
     import database
+    database.create_user("user1", "password123")
     df = pd.DataFrame({
         "month": list(range(1, 13)),
         "revenue": [float(i * 1000) for i in range(1, 13)],
@@ -75,7 +95,7 @@ def test_load_model_roundtrip_preserves_shape():
         "cac": [100.0] * 12,
     })
     model_id = database.save_model("user1", df)
-    loaded = database.load_model(model_id)
+    loaded = database.load_model(model_id, "user1")
     assert loaded is not None
     assert loaded.shape == df.shape
     assert list(loaded.columns) == list(df.columns)
@@ -83,24 +103,35 @@ def test_load_model_roundtrip_preserves_shape():
 
 def test_load_model_roundtrip_preserves_values():
     import database
+    database.create_user("user1", "password123")
     df = pd.DataFrame({"x": [1.5, 2.5, 3.5]})
     model_id = database.save_model("user1", df)
-    loaded = database.load_model(model_id)
+    loaded = database.load_model(model_id, "user1")
     assert abs(loaded["x"].iloc[0] - 1.5) < 1e-9
     assert abs(loaded["x"].iloc[2] - 3.5) < 1e-9
 
 
 def test_load_nonexistent_model_returns_none():
     import database
-    assert database.load_model("does_not_exist_abc123") is None
+    assert database.load_model("does_not_exist_abc123", "user1") is None
 
 
 def test_different_models_have_different_ids():
     import database
+    database.create_user("u", "password123")
     df = pd.DataFrame({"v": [1]})
     id1 = database.save_model("u", df)
     id2 = database.save_model("u", df)
     assert id1 != id2
+
+
+def test_model_cannot_be_loaded_by_another_user():
+    import database
+    database.create_user("owner", "password123")
+    database.create_user("intruder", "password123")
+    model_id = database.save_model("owner", pd.DataFrame({"v": [1]}))
+    assert database.load_model(model_id, "owner") is not None
+    assert database.load_model(model_id, "intruder") is None
 
 
 # ── Partner requests ──────────────────────────────────────────────────────────
