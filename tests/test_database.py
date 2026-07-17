@@ -4,6 +4,8 @@ Tests for the SQLite persistence layer (database.py).
 Uses pytest's tmp_path fixture to redirect DB_PATH to a temp file,
 keeping tests isolated and leaving no artifacts behind.
 """
+import sqlite3
+
 import pytest
 import pandas as pd
 
@@ -64,6 +66,188 @@ def test_password_is_not_stored_in_plaintext():
         ).fetchone()[0]
     assert stored != "correct horse battery staple"
     assert stored.startswith("scrypt$")
+
+
+def test_init_db_migrates_legacy_password_and_clears_plaintext():
+    import database
+
+    database.DB_PATH.unlink()
+    with sqlite3.connect(database.DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO users (username, password) VALUES (?, ?)",
+            ("legacy-user", "old"),
+        )
+
+    database.init_db()
+
+    with database.get_connection() as connection:
+        columns = {
+            column[1]
+            for column in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        row = connection.execute(
+            """
+            SELECT password_hash
+            FROM users
+            WHERE username = ?
+            """,
+            ("legacy-user",),
+        ).fetchone()
+
+    assert "password" not in columns
+    assert row[0].startswith("scrypt$")
+    assert database.authenticate_user("legacy-user", "old") is True
+    assert database.authenticate_user("legacy-user", "wrong") is False
+
+    migrated_hash = row[0]
+    database.init_db()
+    with database.get_connection() as connection:
+        hash_after_restart = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("legacy-user",),
+        ).fetchone()[0]
+    assert hash_after_restart == migrated_hash
+
+
+def test_init_db_clears_matching_dual_credentials_without_rehashing():
+    import database
+
+    database.DB_PATH.unlink()
+    password_hash = database._hash_password("same-password")
+    with sqlite3.connect(database.DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT,
+                password_hash TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO users (username, password, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            ("dual-user", "same-password", password_hash),
+        )
+
+    database.init_db()
+
+    with database.get_connection() as connection:
+        columns = {
+            column[1]
+            for column in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        row = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("dual-user",),
+        ).fetchone()
+    assert "password" not in columns
+    assert row == (password_hash,)
+    assert database.authenticate_user("dual-user", "same-password") is True
+
+
+def test_init_db_rolls_back_when_non_null_hash_is_empty():
+    import database
+
+    database.DB_PATH.unlink()
+    with sqlite3.connect(database.DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT,
+                password_hash TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO users (username, password, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            ("invalid-hash-user", "legacy-password", ""),
+        )
+
+    with pytest.raises(database.LegacyCredentialMigrationError):
+        database.init_db()
+
+    with sqlite3.connect(database.DB_PATH) as connection:
+        row = connection.execute(
+            """
+            SELECT password, password_hash
+            FROM users
+            WHERE username = ?
+            """,
+            ("invalid-hash-user",),
+        ).fetchone()
+    assert row == ("legacy-password", "")
+
+
+def test_init_db_rolls_back_all_users_when_dual_credentials_conflict():
+    import database
+
+    database.DB_PATH.unlink()
+    conflicting_hash = database._hash_password("current-password")
+    with sqlite3.connect(database.DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password TEXT,
+                password_hash TEXT
+            )
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO users (username, password, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            [
+                ("would-migrate", "legacy-password", None),
+                ("ambiguous", "stale-password", conflicting_hash),
+            ],
+        )
+
+    with pytest.raises(database.LegacyCredentialMigrationError):
+        database.init_db()
+
+    with sqlite3.connect(database.DB_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT username, password, password_hash
+            FROM users
+            ORDER BY id
+            """
+        ).fetchall()
+
+    assert rows == [
+        ("would-migrate", "legacy-password", None),
+        ("ambiguous", "stale-password", conflicting_hash),
+    ]
+
+
+def test_connections_wait_for_parallel_initializers():
+    import database
+
+    with database.get_connection() as connection:
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert busy_timeout == database._SQLITE_BUSY_TIMEOUT_MS
 
 
 def test_session_resolves_to_owner():

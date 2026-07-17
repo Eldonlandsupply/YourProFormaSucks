@@ -23,16 +23,28 @@ _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SESSION_TTL_HOURS = 12
+_SQLITE_BUSY_TIMEOUT_MS = 120_000
+
+
+class LegacyCredentialMigrationError(RuntimeError):
+    """Raised when legacy credentials cannot be migrated without guessing."""
 
 
 def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH, check_same_thread=False)
+    connection = sqlite3.connect(
+        DB_PATH,
+        check_same_thread=False,
+        timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+    )
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+    connection.execute("PRAGMA secure_delete = ON")
     return connection
 
 
 def init_db() -> None:
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -47,6 +59,7 @@ def init_db() -> None:
         }
         if "password_hash" not in columns:
             connection.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        _migrate_legacy_passwords(connection)
 
         connection.execute(
             """
@@ -81,8 +94,13 @@ def init_db() -> None:
         )
 
 
-def _hash_password(password: str, salt: Optional[bytes] = None) -> str:
-    if not isinstance(password, str) or not password:
+def _hash_password(
+    password: str,
+    salt: Optional[bytes] = None,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(password, str) or (not password and not allow_empty):
         raise ValueError("password must not be empty")
     salt = salt or secrets.token_bytes(16)
     derived = hashlib.scrypt(
@@ -112,6 +130,77 @@ def _verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(actual.hex(), expected_hex)
     except (TypeError, ValueError):
         return False
+
+
+def _migrate_legacy_passwords(connection: sqlite3.Connection) -> int:
+    """Hash and clear legacy plaintext credentials in one transaction.
+
+    A row with both credential forms is migrated only when they represent the
+    same password. Conflicting values abort the transaction so startup cannot
+    silently choose a credential and lock out an authorized user.
+    """
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "password" not in columns:
+        return 0
+
+    legacy_rows = connection.execute(
+        """
+        SELECT id, username, password, password_hash
+        FROM users
+        WHERE password IS NOT NULL
+        ORDER BY id
+        """
+    ).fetchall()
+
+    for user_id, username, plaintext, existing_hash in legacy_rows:
+        if not isinstance(plaintext, str):
+            raise LegacyCredentialMigrationError(
+                f"Legacy credential for user id {user_id} is not text"
+            )
+
+        if existing_hash is not None:
+            if not _verify_password(plaintext, existing_hash):
+                raise LegacyCredentialMigrationError(
+                    "Conflicting legacy and hashed credentials for "
+                    f"user {username!r} (id {user_id})"
+                )
+            migrated_hash = existing_hash
+        else:
+            # Legacy releases accepted any string. Preserve that exact
+            # credential during migration; registration policy remains strict.
+            migrated_hash = _hash_password(plaintext, allow_empty=True)
+
+        connection.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password = NULL
+            WHERE id = ? AND password IS NOT NULL
+            """,
+            (migrated_hash, user_id),
+        )
+
+    remaining_plaintext = connection.execute(
+        "SELECT COUNT(*) FROM users WHERE password IS NOT NULL"
+    ).fetchone()[0]
+    if remaining_plaintext:
+        raise LegacyCredentialMigrationError(
+            "Legacy credential migration left plaintext values behind"
+        )
+
+    # Removing the legacy column prevents an older application worker from
+    # writing plaintext credentials after this transaction commits.
+    connection.execute("ALTER TABLE users DROP COLUMN password")
+    remaining_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "password" in remaining_columns:
+        raise LegacyCredentialMigrationError(
+            "Legacy plaintext credential column could not be removed"
+        )
+
+    return len(legacy_rows)
 
 
 def create_user(username: str, password: str) -> bool:

@@ -27,6 +27,7 @@ Usage:
 
 import io
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -63,18 +64,34 @@ class RoastRequest(BaseModel):
     summary: Optional[str] = None
     model_id: Optional[str] = None
 
-class AuthRequest(BaseModel):
-    """Request body for user registration and login."""
+class RegistrationRequest(BaseModel):
+    """Request body for user registration."""
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=8, max_length=256)
 
 
-def require_user(authorization: Optional[str] = Header(default=None)) -> str:
+class LoginRequest(BaseModel):
+    """Request body for login, including credentials from legacy releases."""
+    username: str
+    password: str
+
+
+_BEARER_AUTHORIZATION = re.compile(r"(?i:bearer) ([A-Za-z0-9_-]{43})")
+
+
+def require_user(
+    authorization: Optional[list[str]] = Header(default=None),
+) -> str:
     """Resolve a Bearer token to a user or reject the request."""
-    if not authorization or not authorization.startswith("Bearer "):
+    if authorization is None or len(authorization) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    match = _BEARER_AUTHORIZATION.fullmatch(authorization[0])
+    if match is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    token = authorization.removeprefix("Bearer ").strip()
-    username = database.resolve_session(token) if token else None
+    username = database.resolve_session(match.group(1))
     if username is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session")
     return username
@@ -174,7 +191,7 @@ async def dashboard_page(user: Optional[str] = None) -> str:
 
 
 @app.post("/register")
-async def register(request: AuthRequest) -> JSONResponse:
+async def register(request: RegistrationRequest) -> JSONResponse:
     """Register a new user in the database."""
     success = database.create_user(request.username, request.password)
     if not success:
@@ -183,7 +200,7 @@ async def register(request: AuthRequest) -> JSONResponse:
 
 
 @app.post("/login")
-async def login(request: AuthRequest) -> JSONResponse:
+async def login(request: LoginRequest) -> JSONResponse:
     """Authenticate a user and return a short-lived opaque session token."""
     if not database.authenticate_user(request.username, request.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
