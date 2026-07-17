@@ -17,7 +17,7 @@ import os
 from typing import Optional
 
 try:
-    import google.generativeai as genai  # type: ignore[import]
+    from google import genai  # type: ignore[import]
 except ImportError:
     genai = None
 
@@ -27,8 +27,7 @@ def _init_client() -> Optional[object]:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key or genai is None:
         return None
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-pro")
+    return genai.Client(api_key=api_key)
 
 
 def roast(summary: str) -> str:
@@ -48,7 +47,10 @@ def roast(summary: str) -> str:
             "structure and adjusting your growth assumptions."
         )
     try:
-        response = client.generate_content(summary)
+        response = client.models.generate_content(
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+            contents=summary,
+        )
         # The SDK returns a response object; extract the text portion
         return response.text.strip() if hasattr(response, "text") else str(response)
     except Exception as exc:  # broad except to simplify demo

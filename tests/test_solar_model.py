@@ -110,6 +110,40 @@ class TestDegradation:
         assert max(cfs) - min(cfs) < 1.0  # within $1 rounding
 
 
+class TestOperatingCostsAndDebt:
+    def test_fixed_om_is_applied_per_kw_year_without_unit_loss(self):
+        inputs = _make_solar(
+            capacity_factor=0.0,
+            fixed_om_per_kw=20.0,
+            insurance_per_kw=2.0,
+            debt_fraction=0.0,
+            tax_rate=0.0,
+        )
+        result = calculate_cashflows(inputs, years=1)
+        assert result["cashflows"][1] == -220_000.0
+
+    def test_zero_interest_debt_amortizes_without_division_by_zero(self):
+        unlevered = calculate_cashflows(
+            _make_solar(debt_fraction=0.0, debt_interest_rate=0.0, tax_rate=0.0),
+            years=1,
+        )
+        levered = calculate_cashflows(
+            _make_solar(
+                debt_fraction=0.5,
+                debt_interest_rate=0.0,
+                debt_tenor_years=5,
+                tax_rate=0.0,
+            ),
+            years=1,
+        )
+        expected_principal = levered["debt_amount"] / 5
+        assert unlevered["cashflows"][1] - levered["cashflows"][1] == pytest.approx(expected_principal)
+
+    def test_invalid_fraction_is_rejected(self):
+        with pytest.raises(ValueError, match="debt_fraction"):
+            calculate_cashflows(_make_solar(debt_fraction=1.2), years=5)
+
+
 # ── IRR ───────────────────────────────────────────────────────────────────────
 
 class TestIrr:

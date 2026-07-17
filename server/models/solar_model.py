@@ -56,6 +56,18 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
     Returns:
         Dictionary containing cashflow table and summary metrics.
     """
+    if years < 1:
+        raise ValueError("years must be positive")
+    for name in (
+        "capacity_factor", "degradation", "merchant_percentage", "debt_fraction",
+        "debt_interest_rate", "tax_rate", "itc_percent", "contingency_percent",
+    ):
+        value = getattr(inputs, name)
+        if not 0 <= value <= 1:
+            raise ValueError(f"{name} must be between 0 and 1")
+    if inputs.debt_fraction > 0 and inputs.debt_tenor_years < 1:
+        raise ValueError("debt_tenor_years must be positive when debt is used")
+
     # Capacity and production
     ac_kw = inputs.ac_mw * 1_000
     annual_production_mwh = []
@@ -76,7 +88,7 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
         ppa_price *= 1 + inputs.ppa_escalator  # Escalate PPA each year
 
     # O&M
-    annual_om_cost = ac_kw * (inputs.fixed_om_per_kw + inputs.insurance_per_kw) / 1000  # kW to MW
+    annual_om_cost = ac_kw * (inputs.fixed_om_per_kw + inputs.insurance_per_kw)
     opex = [annual_om_cost for _ in range(years)]
 
     # CapEx
@@ -94,8 +106,11 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
     if inputs.debt_fraction > 0:
         rate = inputs.debt_interest_rate
         n = inputs.debt_tenor_years
-        annuity_factor = (rate * (1 + rate) ** n) / ((1 + rate) ** n - 1)
-        annual_debt_payment = debt_amount * annuity_factor
+        if rate == 0:
+            annual_debt_payment = debt_amount / n
+        else:
+            annuity_factor = (rate * (1 + rate) ** n) / ((1 + rate) ** n - 1)
+            annual_debt_payment = debt_amount * annuity_factor
     else:
         annual_debt_payment = 0.0
 
@@ -110,13 +125,15 @@ def calculate_cashflows(inputs: SolarInputs, years: int = 30) -> Dict[str, Any]:
         # Interest expense on outstanding debt
         interest = debt_balance * inputs.debt_interest_rate
         # Principal payment if within tenor.
-        principal = annual_debt_payment - interest if year < inputs.debt_tenor_years else 0.0
+        principal = min(
+            debt_balance,
+            max(0.0, annual_debt_payment - interest),
+        ) if year < inputs.debt_tenor_years else 0.0
         # Adjust debt balance
         debt_balance = max(0., debt_balance - principal)
-        taxable_income = max(0., ebitda - depreciation - (annual_debt_payment - interest))
+        taxable_income = max(0.0, ebitda - depreciation - interest)
         tax = taxable_income * inputs.tax_rate
-        net_income = ebitda - tax - (annual_debt_payment - interest)
-        cashflow_to_equity = net_income
+        cashflow_to_equity = ebitda - tax - interest - principal
         cashflows.append(cashflow_to_equity)
 
     # Calculate equity IRR using numpy_financial (np.irr was removed in NumPy >= 1.20)

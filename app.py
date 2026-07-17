@@ -27,19 +27,16 @@ Usage:
 
 import io
 import os
-import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
-from . import agent
-from . import database
-
-app = FastAPI(title="Your Proforma Sucks API", version="0.1.0")
+import agent
+import database
 
 ###############################################################################
 # Models
@@ -56,10 +53,10 @@ class ProFormaInput(BaseModel):
     funding injections) as your needs evolve.
     """
 
-    monthly_revenue: float
-    growth_rate: float = 0.05  # 5 % month‑over‑month growth
-    cac: float = 100.0         # customer acquisition cost in dollars
-    gross_margin: float = 0.75 # 75 %
+    monthly_revenue: float = Field(ge=0)
+    growth_rate: float = Field(default=0.05, ge=-1, le=1)
+    cac: float = Field(default=100.0, ge=0)
+    gross_margin: float = Field(default=0.75, ge=0, le=1)
 
 class RoastRequest(BaseModel):
     """Request body for the /roast endpoint."""
@@ -68,8 +65,19 @@ class RoastRequest(BaseModel):
 
 class AuthRequest(BaseModel):
     """Request body for user registration and login."""
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=256)
+
+
+def require_user(authorization: Optional[str] = Header(default=None)) -> str:
+    """Resolve a Bearer token to a user or reject the request."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    token = authorization.removeprefix("Bearer ").strip()
+    username = database.resolve_session(token) if token else None
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session")
+    return username
 
 ###############################################################################
 # Utility functions
@@ -125,11 +133,15 @@ def ensure_templates_loaded() -> None:
 # Route handlers
 ###############################################################################
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initialise the database and create placeholder templates."""
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialise local resources for the application lifecycle."""
     database.init_db()
     ensure_templates_loaded()
+    yield
+
+
+app = FastAPI(title="Your Proforma Sucks API", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/marketing", response_class=HTMLResponse)
@@ -172,20 +184,15 @@ async def register(request: AuthRequest) -> JSONResponse:
 
 @app.post("/login")
 async def login(request: AuthRequest) -> JSONResponse:
-    """Authenticate a user and return a dummy token.
-
-    Real token generation (e.g. JWT) has been omitted for brevity.  The
-    caller should treat the returned value as opaque.
-    """
+    """Authenticate a user and return a short-lived opaque session token."""
     if not database.authenticate_user(request.username, request.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    # For the MVP we simply return a pseudo token derived from the username
-    token = f"token-{uuid.uuid4().hex[:8]}"
+    token = database.create_session(request.username)
     return JSONResponse({"token": token})
 
 
 @app.post("/generate")
-async def generate_proforma(inputs: ProFormaInput, user: Optional[str] = None) -> JSONResponse:
+async def generate_proforma(inputs: ProFormaInput, user: str = Depends(require_user)) -> JSONResponse:
     """Generate a simple pro forma and persist it.
 
     Returns a model identifier that can be used to fetch the model
@@ -193,14 +200,14 @@ async def generate_proforma(inputs: ProFormaInput, user: Optional[str] = None) -
     database as a binary blob (in CSV format) for simplicity.
     """
     df = create_projection(inputs)
-    model_id = database.save_model(user or "anonymous", df)
+    model_id = database.save_model(user, df)
     return JSONResponse({"model_id": model_id, "message": "Model generated successfully"})
 
 
 @app.get("/export/xlsx/{model_id}")
-async def export_xlsx(model_id: str) -> FileResponse:
+async def export_xlsx(model_id: str, user: str = Depends(require_user)) -> StreamingResponse:
     """Export a saved model to XLSX and return it as a download."""
-    df = database.load_model(model_id)
+    df = database.load_model(model_id, user)
     if df is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     # Write DataFrame to Excel in memory
@@ -209,11 +216,15 @@ async def export_xlsx(model_id: str) -> FileResponse:
         df.to_excel(writer, index=False, sheet_name="ProForma")
     out.seek(0)
     filename = f"proforma_{model_id}.xlsx"
-    return FileResponse(out, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=filename)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/export/pdf/{model_id}")
-async def export_pdf(model_id: str) -> FileResponse:
+async def export_pdf(model_id: str, user: str = Depends(require_user)) -> StreamingResponse:
     """Export a saved model to PDF and return it as a download.
 
     For the MVP we generate a very simple PDF by converting the
@@ -222,7 +233,7 @@ async def export_pdf(model_id: str) -> FileResponse:
     enhance this function later to use reportlab or WeasyPrint for
     richer output.
     """
-    df = database.load_model(model_id)
+    df = database.load_model(model_id, user)
     if df is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     import fitz  # PyMuPDF
@@ -235,15 +246,19 @@ async def export_pdf(model_id: str) -> FileResponse:
     pdf_bytes = doc.write()
     doc.close()
     filename = f"proforma_{model_id}.pdf"
-    return FileResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", filename=filename)
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/roast")
-async def roast(request: RoastRequest) -> JSONResponse:
+async def roast(request: RoastRequest, user: str = Depends(require_user)) -> JSONResponse:
     """Send a pro forma or summary to the AI agent and return the critique."""
     summary = request.summary
     if request.model_id:
-        df = database.load_model(request.model_id)
+        df = database.load_model(request.model_id, user)
         if df is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
         # Derive a textual summary from the DataFrame (very naive)

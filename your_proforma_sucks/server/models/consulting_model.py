@@ -84,7 +84,8 @@ def calculate_income_statement(inputs: ConsultingInputs, years: int = 5) -> Dict
         cashflows.append(net_income)
 
     try:
-        irr = np.irr(cashflows)
+        import numpy_financial as npf
+        irr = float(npf.irr(cashflows))
     except Exception:
         irr = None
 
